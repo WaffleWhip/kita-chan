@@ -147,15 +147,14 @@ export function createDiscordBot(token: string): Client {
 
             const updateDiscord = async (blocks: chatModule.ChatResponseBlock[], isFinal: boolean = false) => {
                 let mainText = '';
-                const executedTools: string[] = [];
+                const executedTools = new Set<string>();
 
                 for (const block of blocks) {
                     if (block.type === 'text') {
                         mainText += block.content;
                     } else if (block.type === 'execution' && block.name) {
-                        executedTools.push(`\`${block.name}\``);
+                        executedTools.add(`\`${block.name}\``);
                     }
-                    // Thinking blocks are intentionally ignored for a cleaner UI
                 }
 
                 // Discord message content limit is 2000 characters
@@ -170,8 +169,8 @@ export function createDiscordBot(token: string): Client {
                     iconURL: client.user?.displayAvatarURL() || undefined
                 });
 
-                if (executedTools.length > 0) {
-                    embed.setDescription(`🛠️ **Tools Executed:** ${executedTools.join(', ')}`);
+                if (executedTools.size > 0) {
+                    embed.setDescription(`🛠️ **Tools Executed:** ${Array.from(executedTools).join(', ')}`);
                 } else {
                     embed.setDescription(isFinal ? '✨ *Ready!*' : '💭 *Working on it...*');
                 }
@@ -195,9 +194,8 @@ export function createDiscordBot(token: string): Client {
             };
 
             const onUpdate = (blocks: chatModule.ChatResponseBlock[]) => {
-                pendingText = blocks as any; // Re-use pendingText variable for simplicity, mapped to blocks
+                pendingText = blocks as any;
                 const now = Date.now();
-                // Throttle updates to ~1.5 seconds to avoid Discord rate limits
                 if (now - lastEditTime > 1500 && replyMsg) {
                     if (timeout) clearTimeout(timeout);
                     lastEditTime = now;
@@ -216,7 +214,7 @@ export function createDiscordBot(token: string): Client {
             const { blocks: finalBlocks } = await chat(sessionId, promptWithFiles, images, onUpdate);
             if (timeout) clearTimeout(timeout);
 
-            // Trigger the final update with the 100% complete blocks from the result
+            // Trigger the final update
             await updateDiscord(finalBlocks, true);
         } catch (err: any) {
             console.error('[AI] Error:', err);
