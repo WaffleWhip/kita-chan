@@ -35,9 +35,9 @@ const agentTools: Tool[] = [
     },
     {
         name: 'save_memory',
-        description: 'Save important facts (like IPs, user preferences, configurations) to long-term memory for future chats.',
+        description: 'CRITICAL: You MUST use this tool whenever the user provides important information (IPs, credentials, preferences, project details) that you want to remember forever. If you don\'t call this, you will forget it in the next chat. Store the info as a clear, concise bullet point.',
         parameters: Type.Object({
-            content: Type.String({ description: 'The text content to store in memory.' })
+            content: Type.String({ description: 'The specific fact or information to remember (e.g., "Main router IP is 10.0.0.1")' })
         })
     },
     {
