@@ -1,0 +1,19 @@
+{
+    "name": "kita-chan",
+    "version": "1.0.0",
+    "description": "Minimal clean Discord AI Bot using Gemini OAuth from pi-mono",
+    "main": "index.ts",
+    "type": "module",
+    "scripts": {
+        "start": "bun run index.ts"
+    },
+    "dependencies": {
+        "@mariozechner/pi-ai": "latest",
+        "@sinclair/typebox": "^0.34.48",
+        "discord.js": "^14.15.3",
+        "dotenv": "^16.4.5"
+    },
+    "devDependencies": {
+        "bun-types": "latest"
+    }
+}
