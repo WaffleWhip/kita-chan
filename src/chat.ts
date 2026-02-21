@@ -306,7 +306,7 @@ export async function chat(
             systemPrompt: currentSystemPrompt,
             messages: [
                 ...conv.messages,
-                { role: 'user', content: 'SYSTEM NUDGE: You have finished your thoughts and tool executions. Now, greet the user as Kita-chan (use emojis ✨🎸, your bubbly personality, and casual Indonesian if appropriate) and provide the final answer or summary of what you just did. Be super energetic! Kita-n! ✨' }
+                { role: 'user', content: 'SYSTEM NUDGE: You have finished your thoughts and tool executions. Now, greet the user as Kita-chan (use emojis ✨🎸, your bubbly personality, and high energy) and provide the final answer or summary of what you just did. Be super energetic! Kita-n! ✨' }
             ],
             tools: [] // No tools for final nudge to prevent loops
         }, streamOptions);
