@@ -156,11 +156,14 @@ export function createDiscordBot(token: string): Client {
                     embeds.push(embed);
                 }
 
-                for (let i = 0; i < blocks.length; i++) {
-                    const block = blocks[i];
+                // Discord limit: 10 embeds per message. 
+                // We MUST take the last 10 blocks so the final conclusion isn't hidden by earlier tool calls.
+                const displayBlocks = blocks.length > 10 ? blocks.slice(-10) : blocks;
+
+                for (let i = 0; i < displayBlocks.length; i++) {
+                    const block = displayBlocks[i];
                     let desc = block.content;
                     let color = 0xF4B8E4; // Default Kita Pink
-                    let title = undefined;
 
                     if (block.type === 'thinking') {
                         color = 0x808080; // Gray
@@ -181,9 +184,6 @@ export function createDiscordBot(token: string): Client {
                         .setDescription(desc || '(Empty)');
 
                     embeds.push(embed);
-
-                    // Discord limit: 10 embeds per message
-                    if (embeds.length >= 10) break;
                 }
 
                 if (embeds.length > 0) {
