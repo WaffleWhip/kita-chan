@@ -84,7 +84,11 @@ export function createDiscordBot(token: string): Client {
             .replace(`<@!${client.user!.id}>`, '')
             .trim();
 
-        if (!prompt) return;
+        // Check if there are any attachments (images or files)
+        const hasAttachments = message.attachments.size > 0;
+
+        // Ignore empty messages with no attachments
+        if (!prompt && !hasAttachments) return;
 
         if (!isReady()) {
             await message.reply('Not authenticated. Use /auth first.');
