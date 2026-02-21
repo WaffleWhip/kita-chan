@@ -1,61 +1,52 @@
-# 🎸 Kita-chan: The Sparkly Discord AI Assistant ✨
+# Kita-chan Discord Bot
 
-Welcome to the **Kita-chan** template! This is a high-energy, cheerful Discord AI bot inspired by Ikuyo Kita from *Bocchi the Rock!*. It's built with modern tech like Bun, TypeScript, and the `@mariozechner/pi-ai` library for advanced agentic capabilities.
+A personal assistant Discord bot based on the character Ikuyo Kita from Kessoku Band. This is a personal project created for fun and experimentation with agentic AI.
 
-## ✨ Features
+## Overview
 
-- **Kita-chan Persona**: A bubbly, expressive, and social-media-savvy personality. She uses emojis liberally and has her signature catchphrase: "Kita-n! ✨".
-- **Dynamic Model Selection**: Use `/model` to switch between AI models via a sleek Discord Select Menu.
-- **Unified Telemetry**: Control "Thinking" (reasoning) and "Execution" (tool calls) visibility with the `/telemetry` command.
-- **Agent Skills System**: Easily extendable functionality through a folder-based skill system.
-- **Multimodal Support**: She can see images and read text-based file attachments (txt, md, json, code).
-- **Final Answer Guard**: Ensures the bot always provides a friendly concluding message, even after complex tool loops.
+This project implements a Discord bot using Bun, TypeScript, and the `@mariozechner/pi-ai` library. It focuses on maintaining a specific character persona while providing useful tools and AI interactions.
 
-## 🚀 Quick Start
+## Features
 
-### 1. Prerequisites
-- [Bun](https://bun.sh/) installed on your system.
-- A Discord Bot Token (from [Discord Developer Portal](https://discord.com/developers/applications)).
-- Gemini API access (via OAuth or API Key).
+- **Character Persona**: Implementation of the Kita-chan persona through system prompts.
+- **Model Management**: Interactive selection of AI models using Discord components.
+- **Telemetry Control**: Toggle visibility for reasoning and tool execution steps.
+- **Skill System**: Plugin-based architecture for adding new functionalities.
+- **Attachment Support**: Ability to process images and various text file types.
 
-### 2. Setup
-1. Clone this repo.
-2. Install dependencies:
+## Prerequisites
+
+- Bun runtime
+- Discord Bot Token
+- Gemini API access (OAuth or API Key)
+
+## Setup
+
+1. Install dependencies:
    ```bash
    bun install
    ```
-3. Create a `.env` file in the root:
+2. Configure environment variables in a `.env` file:
    ```env
-   DISCORD_TOKEN=your_token_here
-   CLIENT_ID=your_bot_client_id_here
+   DISCORD_TOKEN=your_token
+   CLIENT_ID=your_client_id
    ```
-4. Place your `auth.json` (Gemini CLI tokens) in the root or run the authentication command if implemented.
+3. Ensure authentication credentials (e.g., `auth.json`) are present in the project root.
 
-### 3. Run
+## Usage
+
+Run the bot:
 ```bash
 bun start
 ```
 
-## 🛠️ How to Add Skills
+### Commands
 
-Adding a skill is as easy as creating a folder!
+- `/auth`: Handles Gemini authentication.
+- `/model`: Opens the model selection interface.
+- `/telemetry`: Configures display settings for thinking and execution blocks.
+- `/clear`: Resets channel conversation history.
 
-1. Go to `kita/skills/`.
-2. Create a new folder (e.g., `calculate-tax`).
-3. Inside that folder, create a `SKILL.md`.
-4. Define your skill instructions in `SKILL.md` using the template found in `kita/skills/_template/SKILL.md`.
-5. Kita-chan will automatically discover the skill and use it when relevant!
+## Skill Development
 
-## 🎮 Slash Commands
-
-- `/auth`: Start the Gemini authentication process.
-- `/model`: Open the model selection menu.
-- `/telemetry [thinking] [execution]`: Toggle visibility of AI reasoning and tool steps.
-- `/clear`: Clear the conversation memory for the current channel.
-
-## 🎸 Contributing
-
-Feel free to fork this template and add your own "Kita-Aura"! If you find any bugs or have feature requests, please open an issue.
-
----
-*Kita-chan is living in your screen to help you solve anything! Kita-n! ✨🎸📸*
+To add a new skill, create a directory in `kita/skills/` with a `SKILL.md` file following the provided template. The system dynamically discovers and integrates these instructions into the AI context.
