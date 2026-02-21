@@ -250,8 +250,9 @@ export async function chat(
         const formattedTurnBlocks = formatResponseBlocks(response.content);
         accumulatedBlocks.push(...formattedTurnBlocks);
 
-        const toolCalls = response.content.filter((c): c is ToolCall => c.type === 'toolCall');
+        const toolCalls = response.content.filter((c: ToolCall | any) => c.type === 'toolCall');
         if (toolCalls.length > 0) {
+            console.log(`[Chat] Turn ${loops}: Model provided ${toolCalls.length} tool calls.`);
             for (const toolCall of toolCalls) {
                 console.log(`[Agent] Calling tool: ${toolCall.name}`);
 
@@ -290,6 +291,7 @@ export async function chat(
                 });
             }
         } else {
+            console.log(`[Chat] Turn ${loops}: Model finished (no tool calls).`);
             isDone = true;
         }
     }
@@ -300,15 +302,26 @@ export async function chat(
     if (isDone && !hasText && loops < 10) {
         console.log('[Chat] Model finished without text blocks. Nudging for final answer...');
         const currentSystemPrompt = rebuildSystemPrompt();
-        const streamOptions: any = { apiKey, sessionId, maxTokens: 1024 }; // Smaller budget for final nudge
+        const streamOptions: any = {
+            apiKey,
+            sessionId,
+            maxTokens: 1024
+        };
+
+        // For the final nudge, we try to disable reasoning if it's a reasoning model
+        // to avoid another long "thinking" loop without text.
+        const nudgeMessages: Message[] = [
+            ...conv.messages,
+            {
+                role: 'user',
+                content: 'SYSTEM NOTICE: You have completed your tools and reasoning. Now, respond to the user as Kita-chan. You MUST provide a final text response with your bubbly personality and emojis. Match the language used by the user in the latest message. Do not reason anymore, just answer.'
+            }
+        ];
 
         const s = streamSimple(model, {
             systemPrompt: currentSystemPrompt,
-            messages: [
-                ...conv.messages,
-                { role: 'user', content: 'SYSTEM NUDGE: You have finished your thoughts and tool executions. Now, greet the user as Kita-chan (use emojis ✨🎸, your bubbly personality, and high energy) and provide the final answer or summary of what you just did. Be super energetic! Kita-n! ✨' }
-            ],
-            tools: [] // No tools for final nudge to prevent loops
+            messages: nudgeMessages,
+            tools: [] // No tools for final nudge
         }, streamOptions);
 
         const prevTurnBlocks = [...accumulatedBlocks];
@@ -320,12 +333,14 @@ export async function chat(
         }
 
         const response = await s.result();
+        console.log('[Chat] Final nudge received response content with', response.content.length, 'parts.');
         conv.messages.push({ ...response, role: 'assistant' });
         const formattedTurnBlocks = formatResponseBlocks(response.content);
         accumulatedBlocks.push(...formattedTurnBlocks);
     }
 
     if (loops >= 10) {
+        console.warn('[Chat] Hit maximum tool loop limit (10).');
         accumulatedBlocks.unshift({ type: 'text', content: '(Maximum tool loop reached)\n' });
     }
 
@@ -336,6 +351,8 @@ export async function chat(
         .map(b => b.content)
         .join('')
         .trim();
+
+    console.log(`[Chat] Response complete. Blocks: ${accumulatedBlocks.length}, Text length: ${finalText.length}`);
 
     return {
         text: finalText,
