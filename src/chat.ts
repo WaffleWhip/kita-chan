@@ -298,9 +298,14 @@ export async function chat(
 
     // Final Guard: If we are "done" but haven't provided any text blocks to the user,
     // do one final tiny non-tool turn to force a summary/answer.
-    const hasText = accumulatedBlocks.some(b => b.type === 'text');
-    if (isDone && !hasText && loops < 10) {
-        console.log('[Chat] Model finished without text blocks. Nudging for final answer...');
+    // Final Guard: If we are "done" but the response doesn't END with a text block,
+    // do one final nudge to ensure Kita-chan always has the last word.
+    // This prevents the bot from appearing "stuck" at a thinking or execution block.
+    const lastBlock = accumulatedBlocks[accumulatedBlocks.length - 1];
+    const endsWithText = lastBlock?.type === 'text';
+
+    if (isDone && !endsWithText && loops < 10) {
+        console.log(`[Chat] Response ends with ${lastBlock?.type || 'nothing'}. Nudging for final conclusion...`);
         const currentSystemPrompt = rebuildSystemPrompt();
         const streamOptions: any = {
             apiKey,
