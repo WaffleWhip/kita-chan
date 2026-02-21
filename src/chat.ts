@@ -328,15 +328,29 @@ export async function chat(
         for await (const event of s) {
             if (onUpdate && (event as any).partial) {
                 const currentTurnBlocks = formatResponseBlocks((event as any).partial.content);
-                onUpdate([...prevTurnBlocks, ...currentTurnBlocks]);
+                // In the final guard nudge, we ONLY show text blocks to the user
+                const textOnlyCurrentBlocks = currentTurnBlocks.filter(b => b.type === 'text');
+                onUpdate([...prevTurnBlocks, ...textOnlyCurrentBlocks]);
             }
         }
 
         const response = await s.result();
         console.log('[Chat] Final nudge received response content with', response.content.length, 'parts.');
         conv.messages.push({ ...response, role: 'assistant' });
+
+        // Final Nudge: Only keep text blocks to ensure a clean ending
         const formattedTurnBlocks = formatResponseBlocks(response.content);
-        accumulatedBlocks.push(...formattedTurnBlocks);
+        const textOnlyBlocks = formattedTurnBlocks.filter(b => b.type === 'text');
+
+        accumulatedBlocks.push(...textOnlyBlocks);
+
+        // If the model STUBBORNLY produced no text even in the nudge, add a fallback
+        if (textOnlyBlocks.length === 0) {
+            accumulatedBlocks.push({
+                type: 'text',
+                content: 'Kita-n! ✨ I\'ve finished my tasks for you! Is there anything else you need? 🎸☀️'
+            });
+        }
     }
 
     if (loops >= 10) {
