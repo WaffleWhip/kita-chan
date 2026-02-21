@@ -20,4 +20,5 @@ Thumbs.db
 
 # Project Specific (Clean Template)
 kita/skills/openwrt/
+kita/MEMORY.md
 !kita/skills/_template/
