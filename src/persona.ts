@@ -15,6 +15,7 @@ import { join } from 'path';
 // Paths relative to project root
 const KITA_DIR = join(process.cwd(), 'kita');
 const PERSONA_PATH = join(KITA_DIR, 'PERSONA.md');
+const RULES_PATH = join(KITA_DIR, 'RULES.md');
 const MEMORY_PATH = join(KITA_DIR, 'MEMORY.md');
 const SKILLS_DIR = join(KITA_DIR, 'skills');
 
@@ -131,6 +132,12 @@ export function buildSystemPrompt(): string {
 
     // Inject skills into persona template
     let finalPrompt = persona.replace('{skills}', skillsBlock);
+
+    // Append rules if exists
+    if (existsSync(RULES_PATH)) {
+        const rules = readFileSync(RULES_PATH, 'utf-8').trim();
+        finalPrompt += '\n\n' + rules;
+    }
 
     // Append memory if exists and has actual data
     if (memoryBlock) {

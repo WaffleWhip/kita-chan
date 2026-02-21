@@ -5,41 +5,23 @@
  * This module imports the platform-agnostic chat service.
  */
 
-import { ApplicationCommandOptionType, MessageFlags, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, type ChatInputCommandInteraction, type StringSelectMenuInteraction } from 'discord.js';
-import { chat, listModels, currentModel, switchModel, isReady, clearSession, getSessionLength, setThinkingVisibility, setExecutionVisibility, getThinkingVisibility, getExecutionVisibility } from '../chat';
-import { authenticate } from '../auth';
+import { MessageFlags, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, type ChatInputCommandInteraction, type StringSelectMenuInteraction } from 'discord.js';
+import { chat, listModelsForProvider, currentModel, switchModel, isReady, clearSession, getSessionLength, clearLongTermMemory } from '../chat';
+import { authenticateProvider, getAvailableProviders, setActiveProvider, getActiveProvider, getActiveProviderName, isProviderAuthenticated, type ProviderKey } from '../auth';
 
 // Slash command definitions for Discord API registration
 export const COMMANDS = [
     {
         name: 'auth',
-        description: 'Start the Gemini CLI authentication process'
+        description: 'Authenticate with an AI provider'
     },
     {
         name: 'model',
-        description: 'Change the active AI model via a dropdown menu'
-    },
-    {
-        name: 'telemetry',
-        description: 'Toggle AI reasoning (Thinking) and Tool Execution visibility',
-        options: [
-            {
-                name: 'thinking',
-                type: ApplicationCommandOptionType.Boolean,
-                description: 'Show or hide AI reasoning steps',
-                required: false
-            },
-            {
-                name: 'execution',
-                type: ApplicationCommandOptionType.Boolean,
-                description: 'Show or hide tool execution details',
-                required: false
-            }
-        ]
+        description: 'Switch AI provider and model'
     },
     {
         name: 'clear',
-        description: 'Clear conversation memory for this channel'
+        description: 'Clear Kita-chan\'s session history and MEMORY.md'
     }
 ];
 
@@ -57,119 +39,202 @@ export function resolveAuthCallback(url: string): void {
     }
 }
 
-// /telemetry handler
-export async function handleTelemetry(interaction: ChatInputCommandInteraction) {
-    const thinking = interaction.options.getBoolean('thinking', false);
-    const execution = interaction.options.getBoolean('execution', false);
+// /auth handler — shows provider dropdown
+export async function handleAuth(interaction: ChatInputCommandInteraction) {
+    const providers = getAvailableProviders();
 
-    // Check if at least one option was provided
-    const thinkingProvided = interaction.options.get('thinking') !== null;
-    const executionProvided = interaction.options.get('execution') !== null;
+    const select = new StringSelectMenuBuilder()
+        .setCustomId('auth_provider')
+        .setPlaceholder('Choose a provider to authenticate...')
+        .addOptions(
+            providers.map(p => ({
+                label: p.name,
+                description: p.authenticated ? '✅ Already authenticated' : '🔑 Click to login',
+                value: p.id,
+                emoji: p.authenticated ? '✅' : '🔐'
+            }))
+        );
 
-    if (!thinkingProvided && !executionProvided) {
-        // Just show current status
-        const tStatus = getThinkingVisibility() ? 'Visible' : 'Hidden';
-        const eStatus = getExecutionVisibility() ? 'Shown' : 'Hidden';
-        await interaction.reply({
-            content: `**Current Telemetry Settings**:\n- Thinking: \`${tStatus}\`\n- Execution Detail: \`${eStatus}\` \n\n*Use options (\`thinking:\`, \`execution:\`) to change these.*`,
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
+    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
 
-    let msg = 'Telemetry updated:\n';
-    if (thinkingProvided) {
-        setThinkingVisibility(thinking!);
-        msg += `- Thinking: **${thinking ? 'Visible' : 'Hidden'}**\n`;
-    }
-    if (executionProvided) {
-        setExecutionVisibility(execution!);
-        msg += `- Execution Detail: **${execution ? 'Shown' : 'Hidden'}**\n`;
-    }
+    const statusLines = providers.map(p =>
+        `${p.authenticated ? '✅' : '❌'} **${p.name}** — ${p.authenticated ? 'Authenticated' : 'Not connected'}`
+    ).join('\n');
 
-    await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
+    const embed = new EmbedBuilder()
+        .setColor(0xF4B8E4)
+        .setTitle('🔐 Authentication')
+        .setDescription(`Select a provider to authenticate:\n\n${statusLines}`)
+        .setFooter({ text: 'Choose a provider from the dropdown to start login' });
+
+    await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
 }
 
-// /auth handler
-export async function handleAuth(interaction: ChatInputCommandInteraction) {
-    await interaction.reply('Starting Gemini CLI authentication process...');
+// Handle auth provider selection
+export async function handleAuthProviderSelect(interaction: StringSelectMenuInteraction) {
+    const providerId = interaction.values[0] as ProviderKey;
+    const providers = getAvailableProviders();
+    const provider = providers.find(p => p.id === providerId);
+
+    await interaction.update({
+        content: `Starting **${provider?.name || providerId}** authentication...`,
+        embeds: [],
+        components: []
+    });
 
     const manualCodePromise = new Promise<string>((resolve) => {
         manualAuthResolver = resolve;
     });
 
     try {
-        await authenticate(
-            (url, _instructions) => {
-                interaction.channel?.send(
-                    `**Action Required**: Open this URL in your browser to login:\n${url}\n\n` +
-                    `*After login, if the page shows an error, copy the URL from your browser's address bar (\`http://localhost:8085...\`) and paste it here!*`
-                );
+        await authenticateProvider(
+            providerId,
+            (url, instructions) => {
+                interaction.followUp({
+                    content: `**Action Required**: Open this URL in your browser:\n${url}\n\n` +
+                        (instructions ? `${instructions}\n\n` : '') +
+                        `*After login, if the page shows an error, copy the URL from your browser's address bar and paste it here!*`,
+                });
             },
             () => manualCodePromise
         );
 
-        await interaction.channel?.send('Authentication successful!');
+        await interaction.followUp({ content: `✅ **${provider?.name || providerId}** authenticated successfully!` });
     } catch (err) {
         console.error('[Auth] Failed:', err);
         manualAuthResolver = null;
-        await interaction.channel?.send('Authentication failed or was interrupted.');
+        await interaction.followUp({ content: `❌ **${provider?.name || providerId}** authentication failed.` });
     }
 }
 
-// /model handler
+// /model handler — shows provider dropdown first, then model dropdown
 export async function handleModel(interaction: ChatInputCommandInteraction) {
-    if (!isReady()) {
-        await interaction.reply({ content: 'Not authenticated. Use `/auth` first.', flags: MessageFlags.Ephemeral });
+    const providers = getAvailableProviders().filter(p => p.authenticated);
+
+    if (providers.length === 0) {
+        await interaction.reply({
+            content: 'No providers authenticated. Use `/auth` first.',
+            flags: MessageFlags.Ephemeral
+        });
         return;
     }
 
-    try {
-        const models = listModels();
-        const active = currentModel();
+    const activeProvider = getActiveProvider();
+    const activeModel = currentModel();
 
-        // Build the Select Menu
-        const select = new StringSelectMenuBuilder()
-            .setCustomId('select_model')
-            .setPlaceholder('Choose a model to use...')
-            .addOptions(
-                models.slice(0, 25).map(m => ({
-                    label: m.name || m.id,
-                    description: m.reasoning ? 'Supports reasoning/thinking' : 'Standard text model',
-                    value: m.id,
-                    default: m.id === active
-                }))
-            );
+    const providerSelect = new StringSelectMenuBuilder()
+        .setCustomId('model_provider')
+        .setPlaceholder('Select Provider')
+        .addOptions(
+            providers.map(p => ({
+                label: p.name,
+                value: p.id,
+                description: p.id === activeProvider ? `Active • Model: ${activeModel}` : 'Switch to this provider',
+                default: p.id === activeProvider,
+                emoji: p.id === activeProvider ? '🟢' : '⚪'
+            }))
+        );
 
-        const row = new ActionRowBuilder<StringSelectMenuBuilder>()
-            .addComponents(select);
+    const providerRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(providerSelect);
 
-        const embed = new EmbedBuilder()
-            .setColor(0xF4B8E4)
-            .setTitle('Select AI Model')
-            .setDescription(`**Active Model**: \`${active}\`\n\nChoose a model from the list below to switch.`)
-            .setFooter({ text: `Showing ${Math.min(models.length, 25)} of ${models.length} available models` });
+    // Show models of the active provider
+    const models = listModelsForProvider(activeProvider);
+    const modelSelect = new StringSelectMenuBuilder()
+        .setCustomId('model_select')
+        .setPlaceholder('Select Model')
+        .addOptions(
+            models.slice(0, 25).map(m => ({
+                label: m.name || m.id,
+                value: m.id,
+                description: m.reasoning ? '🧠 Reasoning' : '💬 Standard',
+                default: m.id === activeModel
+            }))
+        );
 
-        await interaction.reply({
-            embeds: [embed],
-            components: [row],
-            flags: MessageFlags.Ephemeral
-        });
-    } catch (err: any) {
-        console.error('[Model] Error:', err);
-        await interaction.reply({ content: 'Failed to list models.', flags: MessageFlags.Ephemeral });
-    }
+    const modelRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(modelSelect);
+
+    const embed = new EmbedBuilder()
+        .setColor(0xF4B8E4)
+        .setTitle('⚙️ Model Selection')
+        .setDescription(
+            `**Provider**: \`${getActiveProviderName()}\`\n` +
+            `**Model**: \`${activeModel}\`\n\n` +
+            `Select a provider first, then pick a model.`
+        )
+        .setFooter({ text: `${models.length} models available • ${providers.length} provider(s) authenticated` });
+
+    await interaction.reply({
+        embeds: [embed],
+        components: [providerRow, modelRow],
+        flags: MessageFlags.Ephemeral
+    });
 }
 
-/**
- * Handle select menu interactions for model switching.
- */
+// Handle provider selection in /model — updates model dropdown
+export async function handleModelProviderSelect(interaction: StringSelectMenuInteraction) {
+    const selectedProvider = interaction.values[0] as ProviderKey;
+    setActiveProvider(selectedProvider);
+
+    const providers = getAvailableProviders().filter(p => p.authenticated);
+    const models = listModelsForProvider(selectedProvider);
+    const providerName = providers.find(p => p.id === selectedProvider)?.name || selectedProvider;
+
+    // Default to first model of new provider
+    if (models.length > 0) {
+        switchModel(models[0].id);
+    }
+
+    const providerSelect = new StringSelectMenuBuilder()
+        .setCustomId('model_provider')
+        .setPlaceholder('Select Provider')
+        .addOptions(
+            providers.map(p => ({
+                label: p.name,
+                value: p.id,
+                description: p.id === selectedProvider ? `Active • ${models.length} models` : 'Switch to this provider',
+                default: p.id === selectedProvider,
+                emoji: p.id === selectedProvider ? '🟢' : '⚪'
+            }))
+        );
+
+    const providerRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(providerSelect);
+
+    const modelSelect = new StringSelectMenuBuilder()
+        .setCustomId('model_select')
+        .setPlaceholder('Select Model')
+        .addOptions(
+            models.slice(0, 25).map((m, i) => ({
+                label: m.name || m.id,
+                value: m.id,
+                description: m.reasoning ? '🧠 Reasoning' : '💬 Standard',
+                default: i === 0
+            }))
+        );
+
+    const modelRow = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(modelSelect);
+
+    const embed = new EmbedBuilder()
+        .setColor(0xF4B8E4)
+        .setTitle('⚙️ Model Selection')
+        .setDescription(
+            `**Provider**: \`${providerName}\`\n` +
+            `**Model**: \`${models[0]?.id || 'none'}\`\n\n` +
+            `Switched to **${providerName}**. Now pick a model below.`
+        )
+        .setFooter({ text: `${models.length} models available` });
+
+    await interaction.update({ embeds: [embed], components: [providerRow, modelRow] });
+}
+
+// Handle model selection
 export async function handleModelSelect(interaction: StringSelectMenuInteraction) {
     const selectedModel = interaction.values[0];
     switchModel(selectedModel);
 
+    const providerName = getActiveProviderName();
+
     await interaction.update({
-        content: `Model successfully switched to: **${selectedModel}**`,
+        content: `✅ Switched to **${providerName}** → \`${selectedModel}\``,
         embeds: [],
         components: []
     });
@@ -177,8 +242,7 @@ export async function handleModelSelect(interaction: StringSelectMenuInteraction
 
 // /clear handler
 export async function handleClear(interaction: ChatInputCommandInteraction) {
-    const sessionId = interaction.channelId;
-    const msgCount = getSessionLength(sessionId);
-    clearSession(sessionId);
-    await interaction.reply(`Conversation cleared! (${msgCount} messages removed)`);
+    clearSession('global');
+    clearLongTermMemory();
+    await interaction.reply(`All memories cleared! 🌸 Session reset and \`MEMORY.md\` wiped.`);
 }

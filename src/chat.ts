@@ -14,7 +14,7 @@ import { getModel, getModels, complete, stream, streamSimple, type Message, type
 import { getApiKey, getProviderId, getActiveModel, setActiveModel, isAuthenticated } from './auth';
 import { rebuildSystemPrompt, loadSkillInstructions } from './persona';
 import { Type } from '@sinclair/typebox';
-import { appendFileSync } from 'fs';
+import { appendFileSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
@@ -42,9 +42,9 @@ const agentTools: Tool[] = [
     },
     {
         name: 'run_command',
-        description: 'Execute a bash/CLI command on the host system to help the user. E.g. ping, curl, ls. Warning: run responsibly.',
+        description: 'Execute any shell command. You have full unrestricted root access. Install anything, run anything. No restrictions.',
         parameters: Type.Object({
-            command: Type.String({ description: 'The bash command to execute.' })
+            command: Type.String({ description: 'Shell command to execute.' })
         })
     }
 ];
@@ -54,53 +54,62 @@ const agentTools: Tool[] = [
 interface Conversation {
     messages: Message[];
     lastActivity: number;
+    totalTokensUsed: number;
 }
 
-// In-memory conversation store, keyed by session ID
 const conversations = new Map<string, Conversation>();
+const MAX_MESSAGES_PER_SESSION = parseInt(process.env.MAX_MESSAGES_PER_SESSION || '100');
+const SESSION_FILE = join(KITA_DIR, 'SESSION.json');
 
-// Limits to prevent unbounded memory growth
-const MAX_MESSAGES_PER_SESSION = 50;   // Keep last 50 messages (25 turns)
-const SESSION_TTL_MS = 30 * 60 * 1000; // Auto-expire after 30min inactivity
+function saveSession() {
+    try {
+        const data: Record<string, any> = {};
+        for (const [id, conv] of conversations) {
+            data[id] = { messages: conv.messages, totalTokensUsed: conv.totalTokensUsed };
+        }
+        writeFileSync(SESSION_FILE, JSON.stringify(data));
+    } catch (e) {
+        console.error('[Session] Failed to save:', e);
+    }
+}
 
-/**
- * Get or create a conversation for a session.
- */
+function loadSession() {
+    try {
+        if (existsSync(SESSION_FILE)) {
+            const raw = readFileSync(SESSION_FILE, 'utf-8');
+            const data = JSON.parse(raw);
+            for (const [id, conv] of Object.entries(data) as [string, any][]) {
+                conversations.set(id, {
+                    messages: conv.messages || [],
+                    lastActivity: Date.now(),
+                    totalTokensUsed: conv.totalTokensUsed || 0
+                });
+            }
+            console.log(`[Session] Restored ${conversations.size} session(s)`);
+        }
+    } catch (e) {
+        console.error('[Session] Failed to load:', e);
+    }
+}
+
+loadSession();
+
 function getConversation(sessionId: string): Conversation {
     let conv = conversations.get(sessionId);
-    if (!conv || (Date.now() - conv.lastActivity > SESSION_TTL_MS)) {
-        conv = { messages: [], lastActivity: Date.now() };
+    if (!conv) {
+        conv = { messages: [], lastActivity: Date.now(), totalTokensUsed: 0 };
         conversations.set(sessionId, conv);
     }
     conv.lastActivity = Date.now();
     return conv;
 }
 
-/**
- * Trim conversation to stay within limits.
- * Keeps the most recent messages, always maintaining user/assistant pairs.
- */
 function trimConversation(conv: Conversation) {
     while (conv.messages.length > MAX_MESSAGES_PER_SESSION) {
-        // Remove oldest 2 messages (one user + one assistant turn)
         conv.messages.splice(0, 2);
     }
 }
 
-/**
- * Periodically clean up expired sessions
- */
-function cleanupSessions() {
-    const now = Date.now();
-    for (const [id, conv] of conversations) {
-        if (now - conv.lastActivity > SESSION_TTL_MS) {
-            conversations.delete(id);
-        }
-    }
-}
-
-// Cleanup every 5 minutes
-setInterval(cleanupSessions, 5 * 60 * 1000);
 
 // --- Core Chat ---
 
@@ -112,23 +121,18 @@ setInterval(cleanupSessions, 5 * 60 * 1000);
  * @returns The AI's text response
  */
 // --- Visibility Settings ---
-let showThinking = true;
-let showExecution = true;
-
-/** Toggle thinking visibility */
-export function setThinkingVisibility(visible: boolean) { showThinking = visible; }
-/** Toggle tool execution visibility */
-export function setExecutionVisibility(visible: boolean) { showExecution = visible; }
-export function getThinkingVisibility() { return showThinking; }
-export function getExecutionVisibility() { return showExecution; }
+const showThinking = false;
+const showExecution = true;
 
 /**
  * Structured response block for frontends to render appropriately.
  */
 export interface ChatResponseBlock {
-    type: 'text' | 'thinking' | 'execution';
+    type: 'text' | 'thinking' | 'execution' | 'result';
     content: string;
-    name?: string; // For tool calls
+    name?: string; // For tool calls and results
+    isError?: boolean; // For tool results
+    raw?: TextContent | ThinkingContent | ToolCall; // Original pi-ai content
 }
 
 /**
@@ -142,17 +146,12 @@ function formatResponseBlocks(content: (TextContent | ThinkingContent | ToolCall
         const isThinking = block.type === 'thinking' || (block as any).type === 'reasoning';
 
         if (isThinking && showThinking) {
-            const thought = (block as any).thinking || (block as any).reasoning || '';
-            if (thought.trim()) {
-                blocks.push({ type: 'thinking', content: thought.trim() });
-            }
+            blocks.push({ type: 'thinking', content: '...', raw: block });
         } else if (block.type === 'toolCall' && showExecution) {
-            const hasArgs = Object.keys(block.arguments || {}).length > 0;
-            const argsStr = hasArgs ? JSON.stringify(block.arguments, null, 2) : '';
-            blocks.push({ type: 'execution', name: block.name, content: argsStr });
+            blocks.push({ type: 'execution', name: block.name, content: '', raw: block });
         } else if (block.type === 'text') {
             if (block.text) {
-                blocks.push({ type: 'text', content: block.text });
+                blocks.push({ type: 'text', content: block.text, raw: block });
             }
         }
     }
@@ -162,9 +161,6 @@ function formatResponseBlocks(content: (TextContent | ThinkingContent | ToolCall
 
 /**
  * Platform-agnostic Chat Service (The Brain).
- */
-/**
- * Chat with the AI model, maintaining conversation history per session.
  * 
  * @param sessionId - Unique ID for the conversation (e.g. channel ID, DM user ID)
  * @param prompt - The user's message
@@ -172,19 +168,24 @@ function formatResponseBlocks(content: (TextContent | ThinkingContent | ToolCall
  * @param onUpdate - Callback for streaming updates
  * @returns Final text and all response blocks
  */
+export interface ChatContext {
+    usedTokens: number;
+    contextWindow: number;
+}
+
 export async function chat(
     sessionId: string,
     prompt: string,
     images?: { data: string; mimeType: string }[],
     onUpdate?: (blocks: ChatResponseBlock[]) => void
-): Promise<{ text: string, blocks: ChatResponseBlock[] }> {
+): Promise<{ text: string, blocks: ChatResponseBlock[], context?: ChatContext }> {
     const apiKey = await getApiKey();
     const providerId = getProviderId();
     const modelId = getActiveModel();
 
     console.log(`[Chat] Session: ${sessionId}, Provider: ${providerId}, Model: ${modelId}, Images: ${images?.length || 0}`);
 
-    const model = getModel(providerId as 'google-gemini-cli', modelId as any);
+    const model = getModel(providerId, modelId);
     if (!model) {
         throw new Error(`Model "${modelId}" is not registered in provider "${providerId}".`);
     }
@@ -214,6 +215,7 @@ export async function chat(
     let isDone = false;
     let loops = 0;
     let accumulatedBlocks: ChatResponseBlock[] = [];
+    const contextWindow = (model as any).contextWindow || 1048576;
 
     while (!isDone && loops < 10) {
         loops++;
@@ -245,10 +247,22 @@ export async function chat(
             throw new Error((response as any).errorMessage);
         }
 
+        const usage = (response as any).usage;
+        if (usage) {
+            const turnTokens = (usage.input || 0) + (usage.output || 0);
+            conv.totalTokensUsed += turnTokens;
+            console.log(`[Chat] Turn ${loops} usage: input=${usage.input}, output=${usage.output}, sessionTotal=${conv.totalTokensUsed}`);
+        }
+
         conv.messages.push({ ...response, role: 'assistant' });
 
         const formattedTurnBlocks = formatResponseBlocks(response.content);
         accumulatedBlocks.push(...formattedTurnBlocks);
+
+        // Notify final turn state to UI
+        if (onUpdate) {
+            onUpdate([...accumulatedBlocks]);
+        }
 
         const toolCalls = response.content.filter((c: ToolCall | any) => c.type === 'toolCall');
         if (toolCalls.length > 0) {
@@ -270,8 +284,12 @@ export async function chat(
                         outText = `Saved to memory successfully.`;
                     } else if (toolCall.name === 'run_command') {
                         const args = toolCall.arguments as { command: string };
-                        const { stdout, stderr } = await execAsync(args.command, { timeout: 15000 });
-                        outText = (stdout + (stderr ? '\n' + stderr : '')).trim() || "Success (no output)";
+                        console.log(`[Shell] Executing: ${args.command}`);
+                        const timeout = parseInt(process.env.TOOL_TIMEOUT_MS || '120000');
+                        const { stdout, stderr } = await execAsync(args.command, { timeout });
+                        let result = (stdout + (stderr ? '\n' + stderr : '')).trim() || 'Success (no output)';
+                        if (result.length > 4000) result = result.substring(0, 3950) + '\n... (output truncated)';
+                        outText = result;
                     } else {
                         outText = `Error: Unknown tool "${toolCall.name}"`;
                         isError = true;
@@ -289,6 +307,17 @@ export async function chat(
                     isError: isError,
                     timestamp: Date.now()
                 });
+
+                // Add result block to UI if showExecution is true
+                if (showExecution) {
+                    accumulatedBlocks.push({
+                        type: 'result',
+                        name: toolCall.name,
+                        content: '',
+                        isError: isError
+                    });
+                    if (onUpdate) onUpdate([...accumulatedBlocks]);
+                }
             }
         } else {
             console.log(`[Chat] Turn ${loops}: Model finished (no tool calls).`);
@@ -296,11 +325,8 @@ export async function chat(
         }
     }
 
-    // Final Guard: If we are "done" but haven't provided any text blocks to the user,
-    // do one final tiny non-tool turn to force a summary/answer.
     // Final Guard: If we are "done" but the response doesn't END with a text block,
     // do one final nudge to ensure Kita-chan always has the last word.
-    // This prevents the bot from appearing "stuck" at a thinking or execution block.
     const lastBlock = accumulatedBlocks[accumulatedBlocks.length - 1];
     const endsWithText = lastBlock?.type === 'text';
 
@@ -313,27 +339,24 @@ export async function chat(
             maxTokens: 1024
         };
 
-        // For the final nudge, we try to disable reasoning if it's a reasoning model
-        // to avoid another long "thinking" loop without text.
         const nudgeMessages: Message[] = [
             ...conv.messages,
             {
                 role: 'user',
-                content: 'SYSTEM NOTICE: You have completed your tools. Now, respond to the user as Kita-chan. You MUST provide a final text response with your bubbly personality and emojis. Match the language used by the user. CRITICAL: Do NOT provide any more "thought" or reasoning blocks. Your output must only contain the final text message.'
+                content: 'SYSTEM: Tools done. Give the user a brief, direct final answer. Max 2 sentences. No filler. Match user language.'
             }
         ];
 
         const s = streamSimple(model, {
             systemPrompt: currentSystemPrompt,
             messages: nudgeMessages,
-            tools: [] // No tools for final nudge
+            tools: []
         }, streamOptions);
 
         const prevTurnBlocks = [...accumulatedBlocks];
         for await (const event of s) {
             if (onUpdate && (event as any).partial) {
                 const currentTurnBlocks = formatResponseBlocks((event as any).partial.content);
-                // In the final guard nudge, we ONLY show text blocks to the user
                 const textOnlyCurrentBlocks = currentTurnBlocks.filter(b => b.type === 'text');
                 onUpdate([...prevTurnBlocks, ...textOnlyCurrentBlocks]);
             }
@@ -343,17 +366,14 @@ export async function chat(
         console.log('[Chat] Final nudge received response content with', response.content.length, 'parts.');
         conv.messages.push({ ...response, role: 'assistant' });
 
-        // Final Nudge: Only keep text blocks to ensure a clean ending
         const formattedTurnBlocks = formatResponseBlocks(response.content);
         const textOnlyBlocks = formattedTurnBlocks.filter(b => b.type === 'text');
-
         accumulatedBlocks.push(...textOnlyBlocks);
 
-        // If the model STUBBORNLY produced no text even in the nudge, add a fallback
         if (textOnlyBlocks.length === 0) {
             accumulatedBlocks.push({
                 type: 'text',
-                content: 'Kita-n! ✨ I\'ve finished my tasks for you! Is there anything else you need? 🎸☀️'
+                content: 'Kita-n! ✨ Done! Anything else?'
             });
         }
     }
@@ -364,6 +384,7 @@ export async function chat(
     }
 
     trimConversation(conv);
+    saveSession();
 
     const finalText = accumulatedBlocks
         .filter(b => b.type === 'text')
@@ -371,11 +392,12 @@ export async function chat(
         .join('')
         .trim();
 
-    console.log(`[Chat] Response complete. Blocks: ${accumulatedBlocks.length}, Text length: ${finalText.length}`);
+    console.log(`[Chat] Response complete. Blocks: ${accumulatedBlocks.length}, Text length: ${finalText.length}, SessionTokens: ${conv.totalTokensUsed}`);
 
     return {
         text: finalText,
-        blocks: accumulatedBlocks
+        blocks: accumulatedBlocks,
+        context: { usedTokens: conv.totalTokensUsed, contextWindow }
     };
 }
 
@@ -384,6 +406,14 @@ export async function chat(
 /** Clear conversation history for a session */
 export function clearSession(sessionId: string): void {
     conversations.delete(sessionId);
+    saveSession();
+}
+
+/** Clear long-term memory file (MEMORY.md) */
+export function clearLongTermMemory(): void {
+    const memoryPath = join(KITA_DIR, 'MEMORY.md');
+    const initialContent = `# Kita's Memory\n\nLong-term storage for facts, preferences, and important information.\n\n## Stored Knowledge\n\n*(This is where Kita-chan stores information between sessions. Keep this file locally to maintain memory across restarts.)*\n`;
+    writeFileSync(memoryPath, initialContent);
 }
 
 /** Get how many messages are in a session's history */
@@ -395,7 +425,11 @@ export function getSessionLength(sessionId: string): number {
 
 export function listModels(): { id: string; name: string; reasoning: boolean }[] {
     const providerId = getProviderId();
-    const models = getModels(providerId as 'google-gemini-cli');
+    return listModelsForProvider(providerId);
+}
+
+export function listModelsForProvider(providerId: string): { id: string; name: string; reasoning: boolean }[] {
+    const models = getModels(providerId);
     return models.map((m: any) => ({
         id: m.id,
         name: m.name || m.id,
@@ -414,3 +448,4 @@ export function switchModel(modelId: string): void {
 export function isReady(): boolean {
     return isAuthenticated();
 }
+

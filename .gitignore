@@ -21,4 +21,5 @@ Thumbs.db
 # Project Specific (Clean Template)
 kita/skills/openwrt/
 kita/MEMORY.md
+kita/SESSION.json
 !kita/skills/_template/
