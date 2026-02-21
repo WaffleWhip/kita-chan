@@ -314,7 +314,7 @@ export async function chat(
             ...conv.messages,
             {
                 role: 'user',
-                content: 'SYSTEM NOTICE: You have completed your tools and reasoning. Now, respond to the user as Kita-chan. You MUST provide a final text response with your bubbly personality and emojis. Match the language used by the user in the latest message. Do not reason anymore, just answer.'
+                content: 'SYSTEM NOTICE: You have completed your tools. Now, respond to the user as Kita-chan. You MUST provide a final text response with your bubbly personality and emojis. Match the language used by the user. CRITICAL: Do NOT provide any more "thought" or reasoning blocks. Your output must only contain the final text message.'
             }
         ];
 
