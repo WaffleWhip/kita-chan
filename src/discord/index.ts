@@ -146,73 +146,46 @@ export function createDiscordBot(token: string): Client {
             let timeout: any = null;
 
             const updateDiscord = async (blocks: chatModule.ChatResponseBlock[], isFinal: boolean = false) => {
-                const embeds: EmbedBuilder[] = [];
+                let mainText = '';
+                const executedTools: string[] = [];
 
-                if (blocks.length === 0 && !isFinal) {
-                    // Initial "Thinking..." state
-                    const embed = new EmbedBuilder()
-                        .setColor(0xF4B8E4)
-                        .setDescription('Thinking...');
-                    embeds.push(embed);
+                for (const block of blocks) {
+                    if (block.type === 'text') {
+                        mainText += block.content;
+                    } else if (block.type === 'execution' && block.name) {
+                        executedTools.push(`\`${block.name}\``);
+                    }
+                    // Thinking blocks are intentionally ignored for a cleaner UI
                 }
 
-                // Discord limit: 10 embeds per message. 
-                // We MUST take the last 10 blocks so the final conclusion isn't hidden by earlier tool calls.
-                const displayBlocks = blocks.length > 10 ? blocks.slice(-10) : blocks;
-
-                for (let i = 0; i < displayBlocks.length; i++) {
-                    const block = displayBlocks[i];
-                    let desc = block.content;
-                    let color = 0xF4B8E4; // Default Kita Pink
-
-                    if (block.type === 'thinking') {
-                        color = 0x808080; // Gray
-                        desc = `> **Thinking:**\n\`\`\`text\n${desc}\n\`\`\``;
-                    } else if (block.type === 'execution') {
-                        color = 0xFAA61A; // Orange
-                        const argsStr = desc ? `\n\`\`\`json\n${desc}\n\`\`\`` : '';
-                        desc = `> **Running Command:** \`${block.name}\`${argsStr}`;
-                    }
-
-                    // Discord embed description limit is 4096
-                    if (desc.length > 4090) {
-                        desc = desc.substring(0, 4087) + '...';
-                    }
-
-                    const embed = new EmbedBuilder()
-                        .setColor(color)
-                        .setDescription(desc || '(Empty)');
-
-                    embeds.push(embed);
+                // Discord message content limit is 2000 characters
+                if (mainText.length > 2000) {
+                    mainText = mainText.substring(0, 1997) + '...';
                 }
 
-                if (embeds.length > 0) {
-                    // Status info on the first embed
-                    if (!isFinal) {
-                        embeds[0].setAuthor({
-                            name: 'Kita is processing...',
-                            iconURL: client.user?.displayAvatarURL() || undefined
-                        });
-                    } else {
-                        embeds[0].setAuthor({
-                            name: 'Kita finished responding',
-                            iconURL: client.user?.displayAvatarURL() || undefined
-                        });
-                    }
+                const embed = new EmbedBuilder().setColor(0xF4B8E4); // Kita Pink
 
-                    // Model/Settings info on the last embed
-                    const thinkingStatus = chatModule.getThinkingVisibility() ? 'ON' : 'OFF';
-                    const executionStatus = chatModule.getExecutionVisibility() ? 'ON' : 'OFF';
-                    embeds[embeds.length - 1].setFooter({
-                        text: `Model: ${currentModel()} | Thinking: ${thinkingStatus} | Execution: ${executionStatus}`
-                    });
+                embed.setAuthor({
+                    name: isFinal ? 'Kita finished' : 'Kita is processing...',
+                    iconURL: client.user?.displayAvatarURL() || undefined
+                });
+
+                if (executedTools.length > 0) {
+                    embed.setDescription(`🛠️ **Tools Executed:** ${executedTools.join(', ')}`);
+                } else {
+                    embed.setDescription(isFinal ? '✨ *Ready!*' : '💭 *Working on it...*');
                 }
+
+                embed.setFooter({
+                    text: `Model: ${currentModel()}`
+                });
 
                 try {
+                    const msgContent = mainText || (isFinal ? '' : '...');
                     if (!replyMsg) {
-                        replyMsg = await message.reply({ content: '', embeds: embeds });
+                        replyMsg = await message.reply({ content: msgContent, embeds: [embed] });
                     } else {
-                        await replyMsg.edit({ content: '', embeds: embeds });
+                        await replyMsg.edit({ content: msgContent, embeds: [embed] });
                     }
                 } catch (e: any) {
                     console.error('[Discord] Update failed:', e.message);
